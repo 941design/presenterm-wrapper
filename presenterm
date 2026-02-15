@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v kitty >/dev/null 2>&1; then
+  echo "kitty is not installed or not in PATH." >&2
+  exit 1
+fi
+
+IMAGE_NAME="${IMAGE_NAME:-presenterm-wrapper}"
+TAG="${TAG:-latest}"
+PRESENTERM_THEME="${PRESENTERM_THEME:-catppuccin-frappe}"
+PRESENTERM_DETACH="${PRESENTERM_DETACH:-1}"
+
+CWD_DIR="$(pwd)"
+CONTAINER_WORKDIR="/data"
+INPUT_ARG=""
+INPUT_REL_PATH=""
+HAS_THEME_FLAG=0
+
+# Kitty launch font size (set to double a common default of 12).
+KITTY_FONT_SIZE=32
+
+extract_title() {
+  local file="$1"
+  local title=""
+
+  # Prefer YAML frontmatter "title:" when frontmatter is present.
+  if [[ "$(head -n 1 "$file")" == "---" ]]; then
+    title="$(awk '
+      NR==1 { in_fm=1; next }
+      in_fm && /^---[[:space:]]*$/ { exit }
+      in_fm && /^[[:space:]]*title[[:space:]]*:/ {
+        sub(/^[[:space:]]*title[[:space:]]*:[[:space:]]*/, "", $0)
+        print
+        exit
+      }
+    ' "$file")"
+  fi
+
+  # Fallback to first H1.
+  if [[ -z "$title" ]]; then
+    title="$(awk '
+      /^---[[:space:]]*$/ { in_fm = !in_fm; next }
+      in_fm { next }
+      /^[[:space:]]*#[[:space:]]+/ {
+        sub(/^[[:space:]]*#[[:space:]]+/, "", $0)
+        print
+        exit
+      }
+    ' "$file")"
+  fi
+
+  # Trim surrounding quotes from frontmatter value.
+  title="${title#\"}"
+  title="${title%\"}"
+  title="${title#\'}"
+  title="${title%\'}"
+
+  if [[ -z "$title" ]]; then
+    title="$REL_INPUT_PATH"
+  fi
+  printf '%s\n' "$title"
+}
+
+REL_ARGS=()
+for arg in "$@"; do
+  conv="$arg"
+  if [[ "$arg" == "--theme" || "$arg" == --theme=* ]]; then
+    HAS_THEME_FLAG=1
+  fi
+
+  if [[ "$conv" == /* ]]; then
+    case "$conv" in
+      "${CWD_DIR}"/*) conv="${conv#${CWD_DIR}/}" ;;
+    esac
+  fi
+  while [[ "$conv" == ./* ]]; do
+    conv="${conv#./}"
+  done
+
+  if [[ -z "$INPUT_ARG" && "$conv" != -* && -f "${CWD_DIR}/${conv}" ]]; then
+    INPUT_ARG="${arg}"
+    INPUT_REL_PATH="${conv}"
+    rel_dir="$(dirname -- "${INPUT_REL_PATH}")"
+    if [[ "$rel_dir" != "." ]]; then
+      CONTAINER_WORKDIR="/data/${rel_dir}"
+    fi
+  fi
+
+  REL_ARGS+=("$conv")
+done
+
+if [[ "$HAS_THEME_FLAG" -eq 0 && -n "${PRESENTERM_THEME}" ]]; then
+  REL_ARGS=("--theme=${PRESENTERM_THEME}" "${REL_ARGS[@]}")
+fi
+
+WINDOW_TITLE="presenterm"
+if [[ -n "$INPUT_ARG" ]]; then
+  WINDOW_TITLE="$(extract_title "$INPUT_ARG")"
+fi
+printf -v window_title_escaped '%q' "${WINDOW_TITLE}"
+
+docker_cmd=(
+  docker run --rm -it
+  --label "com.console_presenter.managed=true"
+  --label "com.console_presenter.wrapper=presenterm"
+  --cidfile "/tmp/presenterm-cid.$$"
+  -v "${CWD_DIR}:/data"
+  -w "${CONTAINER_WORKDIR}"
+  "${IMAGE_NAME}:${TAG}"
+  "${REL_ARGS[@]}"
+)
+
+printf -v docker_cmd_escaped '%q ' "${docker_cmd[@]}"
+printf -v cwd_dir_escaped '%q' "${CWD_DIR}"
+printf -v cidfile_escaped '%q' "/tmp/presenterm-cid.$$"
+
+shell_cmd="cleanup(){ if [ -f ${cidfile_escaped} ]; then cid=\$(cat ${cidfile_escaped} 2>/dev/null || true); [ -n \"\$cid\" ] && docker rm -f \"\$cid\" >/dev/null 2>&1 || true; rm -f ${cidfile_escaped} >/dev/null 2>&1 || true; fi; }; trap cleanup EXIT HUP INT TERM QUIT; kitty @ set-tab-title ${window_title_escaped} >/dev/null 2>&1 || true; cd ${cwd_dir_escaped} && ${docker_cmd_escaped}; rc=\$?; if [ \$rc -ne 0 ]; then echo; echo 'presenterm container failed (exit '\$rc')'; echo 'Press any key to close...'; read -r -n 1 _; fi; exit \$rc"
+if [[ "${PRESENTERM_DETACH}" == "0" ]]; then
+  kitty --title "${WINDOW_TITLE}" --override "font_size=${KITTY_FONT_SIZE}" zsh -lc "${shell_cmd}"
+else
+  kitty --detach --title "${WINDOW_TITLE}" --override "font_size=${KITTY_FONT_SIZE}" zsh -lc "${shell_cmd}"
+fi
