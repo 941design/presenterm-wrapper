@@ -40,6 +40,10 @@ Bundled runtime dependencies:
    ```bash
    presenterm README.md
    ```
+4. 🧩 Create a new presentation template in your current working directory:
+   ```bash
+   presenterm --init my-talk.md
+   ```
 
 ## Usage
 
@@ -59,6 +63,7 @@ Bundled runtime dependencies:
 presenterm README.md
 presenterm docs/roadmap.md
 IMAGE_NAME=presenterm-wrapper TAG=latest presenterm docs/demo.md
+presenterm --init my-talk.md
 ```
 
 | Command                | Purpose                           |
@@ -66,6 +71,7 @@ IMAGE_NAME=presenterm-wrapper TAG=latest presenterm docs/demo.md
 | `make build`           | Build runtime image               |
 | `make install`         | Install wrapper to `~/.local/bin` |
 | `presenterm README.md` | Start deck from cwd               |
+| `presenterm --init my-talk.md` | Create a starter deck in cwd |
 
 ## Troubleshooting
 
