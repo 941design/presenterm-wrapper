@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:mfontanini.github.io)",
+      "Bash(curl -s https://raw.githubusercontent.com/mfontanini/presenterm/master/Cargo.toml)"
+    ]
+  }
+}

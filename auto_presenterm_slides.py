@@ -6,8 +6,13 @@ import re
 import os
 import argparse
 
-DEFAULT_BODY_FONT_SIZE = 1
-HEADING_FONT_SIZE = 2
+# Presenterm font sizes (presenterm supports integers 1-7 only).
+# To adjust the base font size, modify KITTY_FONT_SIZE in the presenterm wrapper script.
+# The multipliers here are applied relative to that base terminal font size.
+BASE_FONT_SIZE = 3
+
+HEADING_FONT_SIZE = 4
+DEFAULT_BODY_FONT_SIZE = BASE_FONT_SIZE
 
 def parse_frontmatter(lines):
     if not lines or lines[0].strip() != "---":

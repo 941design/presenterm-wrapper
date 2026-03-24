@@ -14,7 +14,7 @@ HAS_THEME_FLAG=0
 INIT_FILE=""
 
 # Kitty launch font size (set to double a common default of 12).
-KITTY_FONT_SIZE=32
+KITTY_FONT_SIZE=12
 
 extract_title() {
   local file="$1"
@@ -120,12 +120,13 @@ if [[ -n "$INIT_FILE" ]]; then
     echo "--init requires a markdown filename ending in .md" >&2
     exit 2
   fi
-  if [[ -e "${CWD_DIR}/${INIT_FILE}" ]]; then
+  if [[ -e "${CWD_DIR}/${INIT_FILE}" || -L "${CWD_DIR}/${INIT_FILE}" ]]; then
     echo "Refusing to overwrite existing file: ${INIT_FILE}" >&2
     exit 1
   fi
 
-  cat > "${CWD_DIR}/${INIT_FILE}" <<'EOF'
+  tmp_init_file="$(mktemp "${CWD_DIR}/.presenterm-init.XXXXXX")"
+  cat > "${tmp_init_file}" <<'EOF'
 ---
 title: My Presentation
 author: Your Name
@@ -178,6 +179,13 @@ flowchart LR
 
 Questions?
 EOF
+
+  # Use no-clobber move so an existing file is never overwritten, even on races.
+  if ! mv -n -- "${tmp_init_file}" "${CWD_DIR}/${INIT_FILE}"; then
+    rm -f -- "${tmp_init_file}"
+    echo "Refusing to overwrite existing file: ${INIT_FILE}" >&2
+    exit 1
+  fi
 
   echo "Created presentation template: ${INIT_FILE}"
   exit 0

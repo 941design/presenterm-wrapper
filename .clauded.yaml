@@ -1,0 +1,30 @@
+version: '1'
+vm:
+  name: clauded-presenterm-wrapper-5e4c4a
+  distro: ubuntu
+  cpus: 4
+  memory: 8GiB
+  disk: 20GiB
+mount:
+  host: /Users/mrother/Projects/941design/presenterm-wrapper
+  guest: /Users/mrother/Projects/941design/presenterm-wrapper
+environment:
+  python: '3.12'
+  node: null
+  java: null
+  kotlin: null
+  rust: null
+  go: null
+  dart: null
+  c: null
+  tools:
+  - docker
+  databases: []
+  frameworks:
+  - claude-code
+  - codex
+  playwright_browsers: []
+claude:
+  dangerously_skip_permissions: true
+ssh:
+  host_key_checking: true

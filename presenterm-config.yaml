@@ -1,5 +1,5 @@
 defaults:
-  max_columns: 120
+  max_columns: 360
   terminal_font_size: 18
 options:
   list_item_newlines: 1
