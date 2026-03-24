@@ -79,25 +79,9 @@ RUN set -eux; \
     > /usr/local/bin/mmdc
 RUN chmod +x /usr/local/bin/mmdc
 
-# Install presenterm (supports amd64 + arm64, robust extraction)
-RUN set -eux; \
-  case "${TARGETARCH:-amd64}" in \
-    amd64)  PT_ARCH="x86_64" ;; \
-    arm64)  PT_ARCH="aarch64" ;; \
-    *) echo "Unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
-  esac; \
-  URL="https://github.com/mfontanini/presenterm/releases/download/v${PRESENTERM_VERSION}/presenterm-${PRESENTERM_VERSION}-${PT_ARCH}-unknown-linux-musl.tar.gz"; \
-  mkdir -p /tmp/pt; \
-  curl -fsSL "$URL" -o /tmp/presenterm.tgz; \
-  tar -xzf /tmp/presenterm.tgz -C /tmp/pt; \
-  BIN="$(find /tmp/pt -type f -name presenterm -o -name 'presenterm.exe' | head -n 1 || true)"; \
-  if [ -z "$BIN" ]; then \
-    BIN="$(find /tmp/pt -type f -maxdepth 3 -perm -111 -name 'presenterm*' | head -n 1 || true)"; \
-  fi; \
-  test -n "$BIN"; \
-  install -m 0755 "$BIN" /usr/local/bin/presenterm; \
-  rm -rf /tmp/pt /tmp/presenterm.tgz; \
-  presenterm --version
+# Install presenterm (built from source submodule)
+COPY build/presenterm-${TARGETARCH} /usr/local/bin/presenterm
+RUN chmod +x /usr/local/bin/presenterm && presenterm --version
 
 COPY presenterm-config.yaml /etc/presenterm/config.yaml
 ENV PRESENTERM_CONFIG_FILE=/etc/presenterm/config.yaml

@@ -1,0 +1,3 @@
+[submodule "presenterm-src"]
+	path = presenterm-src
+	url = https://github.com/mfontanini/presenterm.git
