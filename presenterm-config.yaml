@@ -1,15 +1,27 @@
+# Wrapper configuration (read by Python script and shell script, not presenterm)
+wrapper:
+  font_size: 27        # desired body text size in pt
+  heading_ratio: 0.75  # heading/body ratio (e.g. 0.75 → heading ≈ ¾ of body)
+  image_scale: 1.0     # image scale at reference font_size
+  # Padding in pixels (CSS shorthand):
+  #   padding: 50           → 50px all sides
+  #   padding: [30, 80]     → 30px vertical, 80px horizontal
+  #   padding: [20, 80, 40, 80]  → top, right, bottom, left
+  padding: [20, 80]
+  # Theme overrides injected into frontmatter by the preprocessor
+  theme_override:
+    footer:
+      style: template
+      left:
+        image: mustwork-logo.png
+
 defaults:
-  max_columns: 360
-  terminal_font_size: 18
+  terminal_font_size: 1
+
 options:
   list_item_newlines: 1
-  # whether slides are automatically terminated when a slide title is found.
   implicit_slide_ends: false
-  # show all lists incrementally, by implicitly adding pauses in between elements.
   incremental_lists: false
-  # this option tells presenterm you don't care about extra parameters in
-  # presentation's front matter. This can be useful if you're trying to load a
-  # presentation made for another tool
   strict_front_matter_parsing: true
   auto_render_languages:
     - mermaid

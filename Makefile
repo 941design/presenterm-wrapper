@@ -5,25 +5,19 @@ LOCAL_BIN ?= $(HOME)/.local/bin
 COMMAND_NAME ?= presenterm
 TARGETARCH ?= amd64
 
-.PHONY: build-presenterm-amd64
-build-presenterm-amd64:
-	cd presenterm-src && cargo build --release --target x86_64-unknown-linux-musl
-	mkdir -p build
-	cp presenterm-src/target/x86_64-unknown-linux-musl/release/presenterm build/presenterm-amd64
-
-.PHONY: build-presenterm-arm64
-build-presenterm-arm64:
-	command -v cross >/dev/null || cargo install cross
-	cd presenterm-src && cross build --release --target aarch64-unknown-linux-musl
-	mkdir -p build
-	cp presenterm-src/target/aarch64-unknown-linux-musl/release/presenterm build/presenterm-arm64
-
 .PHONY: build-presenterm
-build-presenterm: build-presenterm-amd64 build-presenterm-arm64
-	@echo "Built presenterm binaries for amd64 and arm64"
+build-presenterm:
+	mkdir -p build
+	docker run --rm -v "$(PWD)/presenterm-src:/src" messense/rust-musl-cross:x86_64-musl bash -c \
+		"cd /src && cargo build --release --target x86_64-unknown-linux-musl"
+	cp presenterm-src/target/x86_64-unknown-linux-musl/release/presenterm build/presenterm-amd64
 
 .PHONY: build
 build: build-presenterm
+	docker build -f $(DOCKERFILE) -t $(IMAGE_NAME):$(TAG) .
+
+.PHONY: build-docker-only
+build-docker-only:
 	docker build -f $(DOCKERFILE) -t $(IMAGE_NAME):$(TAG) .
 
 .PHONY: present-test

@@ -1,3 +1,7 @@
-.presenterm-preprocessed-README.md
+.presenterm-preprocessed-*.md
 __pycache__/
 *~
+build/
+/tmp/
+*.pyc
+.DS_Store

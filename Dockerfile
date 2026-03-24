@@ -12,6 +12,7 @@ RUN set -eux; \
   apt-get update; \
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     python3 \
+    python3-yaml \
     curl \
     tar \
     xz-utils \
@@ -80,11 +81,12 @@ RUN set -eux; \
 RUN chmod +x /usr/local/bin/mmdc
 
 # Install presenterm (built from source submodule)
-COPY build/presenterm-${TARGETARCH} /usr/local/bin/presenterm
+COPY build/presenterm-amd64 /usr/local/bin/presenterm
 RUN chmod +x /usr/local/bin/presenterm && presenterm --version
 
-COPY presenterm-config.yaml /etc/presenterm/config.yaml
-ENV PRESENTERM_CONFIG_FILE=/etc/presenterm/config.yaml
+# Note: presenterm-config.yaml is NOT copied to container.
+# The Python preprocessor reads it from /data and generates a clean config
+# (with wrapper section removed) which it passes to presenterm.
 
 # Copy preprocessor entrypoint
 COPY auto_presenterm_slides.py /usr/local/bin/auto_presenterm_slides.py

@@ -13,8 +13,87 @@ INPUT_REL_PATH=""
 HAS_THEME_FLAG=0
 INIT_FILE=""
 
-# Kitty launch font size (set to double a common default of 12).
-KITTY_FONT_SIZE=12
+# Kitty launch font size: computed dynamically from config
+KITTY_FONT_SIZE=9  # default, will be computed below
+
+compute_kitty_font_size() {
+  local input_file="$1"
+  local config_file="$2"
+
+  # Call Python to compute the optimal base font size
+  python3 - "$input_file" "$config_file" <<'PYEOF'
+import sys
+import yaml
+import os
+
+def compute_font_sizes(target_pt, heading_ratio):
+    """Compute optimal (base, body_mult, heading_mult)"""
+    best_error = float('inf')
+    best = (9, 3, 2)
+
+    for body_mult in range(1, 8):
+        base = round(target_pt / body_mult)
+        heading_mult = max(1, min(7, round(body_mult * heading_ratio)))
+
+        body_error = abs(body_mult * base - target_pt)
+        ratio_error = abs(heading_mult / body_mult - heading_ratio) * target_pt
+        total_error = body_error + ratio_error
+
+        if total_error < best_error:
+            best_error = total_error
+            best = (base, body_mult, heading_mult)
+
+    return best
+
+# Defaults
+font_size = 27
+heading_ratio = 0.75
+
+# Load from config file
+if len(sys.argv) > 2:
+    config_path = sys.argv[2]
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f) or {}
+            wrapper = config.get('wrapper', {})
+            font_size = wrapper.get('font_size', font_size)
+            heading_ratio = wrapper.get('heading_ratio', heading_ratio)
+        except Exception:
+            pass
+
+# Check frontmatter for overrides
+if len(sys.argv) > 1:
+    input_file = sys.argv[1]
+    if os.path.exists(input_file):
+        try:
+            with open(input_file, 'r') as f:
+                lines = f.readlines()
+            if lines and lines[0].strip() == '---':
+                for i in range(1, len(lines)):
+                    if lines[i].strip() == '---':
+                        break
+                    if ':' in lines[i]:
+                        key, val = lines[i].split(':', 1)
+                        key = key.strip().lower()
+                        val = val.strip().strip('"').strip("'")
+                        if key == 'font_size':
+                            try:
+                                font_size = int(val)
+                            except ValueError:
+                                pass
+                        elif key == 'heading_ratio':
+                            try:
+                                heading_ratio = float(val)
+                            except ValueError:
+                                pass
+        except Exception:
+            pass
+
+base, body_mult, heading_mult = compute_font_sizes(font_size, heading_ratio)
+print(base)
+PYEOF
+}
 
 extract_title() {
   local file="$1"
@@ -198,6 +277,13 @@ fi
 
 if [[ "$HAS_THEME_FLAG" -eq 0 && -n "${PRESENTERM_THEME}" ]]; then
   REL_ARGS=("--theme=${PRESENTERM_THEME}" "${REL_ARGS[@]}")
+fi
+
+# Compute dynamic KITTY_FONT_SIZE from config and frontmatter
+if [[ -n "$INPUT_ARG" ]]; then
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  config_file="${script_dir}/presenterm-config.yaml"
+  KITTY_FONT_SIZE=$(compute_kitty_font_size "$INPUT_ARG" "$config_file")
 fi
 
 WINDOW_TITLE="presenterm"

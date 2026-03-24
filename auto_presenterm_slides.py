@@ -4,19 +4,185 @@
 import sys
 import re
 import os
+import shutil
 import argparse
+import yaml
+import tempfile
 
-# Presenterm font sizes (presenterm supports integers 1-7 only).
-# To adjust the base font size, modify KITTY_FONT_SIZE in the presenterm wrapper script.
-# The multipliers here are applied relative to that base terminal font size.
-BASE_FONT_SIZE = 3
+def load_wrapper_config(config_path=None):
+    """Load wrapper configuration from presenterm-config.yaml"""
+    if config_path is None:
+        # Try multiple locations in order:
+        # 1. Environment variable override
+        # 2. presenterm-config.yaml in current working directory (where markdown files are)
+        # 3. presenterm-config.yaml in script directory (if running outside container)
+        candidates = [
+            os.getenv("PRESENTERM_CONFIG"),
+            os.path.join(os.getcwd(), "presenterm-config.yaml"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "presenterm-config.yaml"),
+        ]
 
-HEADING_FONT_SIZE = 4
-DEFAULT_BODY_FONT_SIZE = BASE_FONT_SIZE
+        for candidate in candidates:
+            if candidate and os.path.exists(candidate):
+                config_path = candidate
+                break
+        else:
+            # If none found, use default in current dir
+            config_path = os.path.join(os.getcwd(), "presenterm-config.yaml")
+
+    defaults = {
+        "font_size": 27,
+        "heading_ratio": 0.75,
+        "image_scale": 1.0,
+    }
+
+    if not os.path.exists(config_path):
+        return defaults
+
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f) or {}
+        wrapper = config.get("wrapper", {})
+        result = {
+            "font_size": wrapper.get("font_size", defaults["font_size"]),
+            "heading_ratio": wrapper.get("heading_ratio", defaults["heading_ratio"]),
+            "image_scale": wrapper.get("image_scale", defaults["image_scale"]),
+            "theme_override": wrapper.get("theme_override"),
+            "padding": wrapper.get("padding"),
+        }
+        return result
+    except Exception as e:
+        print(f"Warning: failed to load config from {config_path}: {e}", file=sys.stderr)
+        defaults["theme_override"] = None
+        defaults["padding"] = None
+        return defaults
+
+def compute_font_sizes(target_pt, heading_ratio):
+    """
+    Compute optimal (base, body_mult, heading_mult) to match target_pt and heading_ratio.
+
+    Algorithm: for each body_mult in 1..7, compute base = round(target_pt / body_mult),
+    then heading_mult = clamp(round(body_mult * heading_ratio), 1, 7).
+    Pick the combination with minimum total error.
+
+    Returns: (base, body_mult, heading_mult)
+    """
+    best_error = float('inf')
+    best = (9, 3, 2)
+
+    for body_mult in range(1, 8):
+        base = round(target_pt / body_mult)
+        heading_mult = max(1, min(7, round(body_mult * heading_ratio)))
+
+        body_error = abs(body_mult * base - target_pt)
+        ratio_error = abs(heading_mult / body_mult - heading_ratio) * target_pt
+        total_error = body_error + ratio_error
+
+        if total_error < best_error:
+            best_error = total_error
+            best = (base, body_mult, heading_mult)
+
+    return best
+
+def parse_padding(padding_value):
+    """
+    Parse CSS-style padding shorthand into (top, right, bottom, left) in pixels.
+
+    Accepts:
+      - int/float: same padding all sides
+      - [V, H]: vertical, horizontal
+      - [T, R, B, L]: top, right, bottom, left
+    """
+    if padding_value is None:
+        return (0, 0, 0, 0)
+
+    if isinstance(padding_value, (int, float)):
+        p = int(padding_value)
+        return (p, p, p, p)
+
+    if isinstance(padding_value, list):
+        if len(padding_value) == 1:
+            p = int(padding_value[0])
+            return (p, p, p, p)
+        elif len(padding_value) == 2:
+            v, h = int(padding_value[0]), int(padding_value[1])
+            return (v, h, v, h)
+        elif len(padding_value) == 3:
+            t, h, b = int(padding_value[0]), int(padding_value[1]), int(padding_value[2])
+            return (t, h, b, h)
+        elif len(padding_value) >= 4:
+            return tuple(int(padding_value[i]) for i in range(4))
+
+    return (0, 0, 0, 0)
+
+def padding_to_presenterm_config(padding_px, base_font_size):
+    """
+    Convert pixel padding to presenterm max_columns/max_rows config.
+
+    Uses terminal size to compute content area. Character cell dimensions
+    are estimated from the base font size:
+      - cell width ≈ base * 0.6
+      - cell height ≈ base * 1.2
+
+    Returns dict with defaults config keys, or empty dict if no padding.
+    """
+    top_px, right_px, bottom_px, left_px = padding_px
+
+    if top_px == 0 and right_px == 0 and bottom_px == 0 and left_px == 0:
+        return {}
+
+    # Estimate character cell dimensions from base font size
+    cell_width = base_font_size * 0.6
+    cell_height = base_font_size * 1.2
+
+    # Convert pixel padding to columns/rows
+    left_cols = round(left_px / cell_width) if cell_width > 0 else 0
+    right_cols = round(right_px / cell_width) if cell_width > 0 else 0
+    top_rows = round(top_px / cell_height) if cell_height > 0 else 0
+    bottom_rows = round(bottom_px / cell_height) if cell_height > 0 else 0
+
+    # Query terminal dimensions
+    try:
+        term_cols, term_rows = shutil.get_terminal_size()
+    except Exception:
+        term_cols, term_rows = 200, 50  # fallback
+
+    result = {}
+
+    # Horizontal padding → max_columns + alignment
+    h_total = left_cols + right_cols
+    if h_total > 0 and term_cols > h_total:
+        result["max_columns"] = term_cols - h_total
+        if left_cols == right_cols:
+            result["max_columns_alignment"] = "center"
+        elif left_cols > right_cols:
+            # More padding on left → shift content right
+            result["max_columns_alignment"] = "right"
+        else:
+            result["max_columns_alignment"] = "left"
+
+    # Vertical padding → max_rows + alignment
+    v_total = top_rows + bottom_rows
+    if v_total > 0 and term_rows > v_total:
+        result["max_rows"] = term_rows - v_total
+        if top_rows == bottom_rows:
+            result["max_rows_alignment"] = "center"
+        elif top_rows > bottom_rows:
+            result["max_rows_alignment"] = "bottom"
+        else:
+            result["max_rows_alignment"] = "top"
+
+    return result
 
 def parse_frontmatter(lines):
+    """
+    Parse frontmatter and extract wrapper config keys.
+    Returns (metadata_dict, frontmatter_end_idx, extracted_wrapper_config).
+
+    Strips font_size and heading_ratio from metadata so presenterm doesn't see them.
+    """
     if not lines or lines[0].strip() != "---":
-        return {}, -1
+        return {}, -1, {}
 
     end_idx = None
     for i in range(1, len(lines)):
@@ -24,19 +190,97 @@ def parse_frontmatter(lines):
             end_idx = i
             break
     if end_idx is None:
-        return {}, -1
+        return {}, -1, {}
 
-    metadata = {}
-    for raw in lines[1:end_idx]:
-        if ":" not in raw:
-            continue
-        key, value = raw.split(":", 1)
-        key = key.strip().lower()
-        value = value.strip().strip('"').strip("'")
-        metadata[key] = value
-    return metadata, end_idx
+    # Use yaml.safe_load for proper nested YAML support
+    fm_text = "".join(lines[1:end_idx])
+    try:
+        metadata = yaml.safe_load(fm_text) or {}
+    except yaml.YAMLError:
+        metadata = {}
 
-def add_slide_delimiters(input_path, output_path, level=1):
+    # Extract and remove wrapper keys from metadata
+    wrapper_config = {}
+    for key in ("font_size", "heading_ratio"):
+        if key in metadata:
+            try:
+                if key == "font_size":
+                    wrapper_config["font_size"] = int(metadata.pop(key))
+                elif key == "heading_ratio":
+                    wrapper_config["heading_ratio"] = float(metadata.pop(key))
+            except (ValueError, TypeError):
+                metadata.pop(key, None)
+
+    return metadata, end_idx, wrapper_config
+
+def write_frontmatter(lines, metadata, end_idx, theme_override=None, heading_mult=None, body_mult=None):
+    """Reconstruct frontmatter with given metadata, injecting theme override and font sizes."""
+
+    def _ensure_theme_override(fm_dict):
+        """Ensure fm_dict has theme.override dict structure."""
+        if "theme" not in fm_dict:
+            fm_dict["theme"] = {}
+        if isinstance(fm_dict["theme"], str):
+            fm_dict["theme"] = {"name": fm_dict["theme"]}
+        if "override" not in fm_dict["theme"]:
+            fm_dict["theme"]["override"] = {}
+
+    def _inject_intro_slide_fonts(fm_dict, heading_mult, body_mult):
+        """Inject intro slide font sizes: title=heading, subtitle/date/author=body."""
+        _ensure_theme_override(fm_dict)
+        override = fm_dict["theme"]["override"]
+        if "intro_slide" not in override:
+            override["intro_slide"] = {}
+        intro = override["intro_slide"]
+
+        # Title uses heading size (h1)
+        if "title" not in intro:
+            intro["title"] = {}
+        if "font_size" not in intro["title"]:
+            intro["title"]["font_size"] = heading_mult
+
+        # Subtitle, event, location, date use body multiplier (h2-like)
+        for key in ("subtitle", "event", "location", "date"):
+            if key not in intro:
+                intro[key] = {}
+            if "font_size" not in intro[key]:
+                intro[key]["font_size"] = body_mult
+
+        # Author also uses body multiplier
+        if "author" not in intro:
+            intro["author"] = {}
+        if "font_size" not in intro["author"]:
+            intro["author"]["font_size"] = body_mult
+
+    if end_idx < 0:
+        if not theme_override and heading_mult is None:
+            return lines
+        fm_dict = {}
+    else:
+        # Build frontmatter dict from parsed metadata
+        fm_dict = {}
+        for key, value in metadata.items():
+            fm_dict[key] = value
+
+    # Inject theme override (merge with any existing theme from frontmatter)
+    if theme_override:
+        _ensure_theme_override(fm_dict)
+        # Merge: frontmatter values take precedence over config
+        for k, v in theme_override.items():
+            if k not in fm_dict["theme"]["override"]:
+                fm_dict["theme"]["override"][k] = v
+
+    # Inject intro slide font sizes
+    if heading_mult is not None and body_mult is not None:
+        _inject_intro_slide_fonts(fm_dict, heading_mult, body_mult)
+
+    fm_yaml = yaml.dump(fm_dict, default_flow_style=False, sort_keys=False)
+    result = ["---\n", fm_yaml, "---\n"]
+    if end_idx < 0:
+        return result + lines
+    return result + lines[end_idx + 1:]
+
+def add_slide_delimiters(input_path, output_path, level=1, font_size=None, heading_ratio=None, theme_override=None):
     """Insert <!-- end_slide --> before each heading of given level or higher"""
     slide_heading_pattern = re.compile(r'^\s*(#{1,' + str(level) + r'})\s+.+')
     any_heading_pattern = re.compile(r'^\s*(#{1,6})\s+.+')
@@ -47,13 +291,24 @@ def add_slide_delimiters(input_path, output_path, level=1):
     with open(input_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
-    frontmatter_end_idx = -1
-    if lines and lines[0].strip() == "---":
-        _, frontmatter_end_idx = parse_frontmatter(lines)
+    # Parse frontmatter
+    metadata, frontmatter_end_idx, wrapper_config = parse_frontmatter(lines)
 
-    result = []
-    if frontmatter_end_idx >= 0:
-        result.extend(lines[:frontmatter_end_idx + 1])
+    # Use frontmatter overrides if provided
+    if "font_size" in wrapper_config:
+        font_size = wrapper_config["font_size"]
+    if "heading_ratio" in wrapper_config:
+        heading_ratio = wrapper_config["heading_ratio"]
+
+    # Compute font sizes
+    base, body_mult, heading_mult = compute_font_sizes(font_size, heading_ratio)
+
+    # Reconstruct frontmatter without wrapper keys, injecting theme override
+    result = write_frontmatter(lines, metadata, frontmatter_end_idx,
+                              theme_override=theme_override,
+                              heading_mult=heading_mult, body_mult=body_mult)
+
+    # Process the body
     in_slide = False
     first_slide_heading_seen = False
     in_code_block = False
@@ -61,16 +316,19 @@ def add_slide_delimiters(input_path, output_path, level=1):
     dedent_prefix = ""
     body_start_idx = frontmatter_end_idx + 1 if frontmatter_end_idx >= 0 else 0
 
-    i = body_start_idx
-    while i < len(lines):
-        line = lines[i]
+    # Skip the rewritten frontmatter
+    body_lines = lines[body_start_idx:]
+    processed = []
+
+    i = 0
+    while i < len(body_lines):
+        line = body_lines[i]
 
         if horizontal_rule_pattern.match(line):
             i += 1
             continue
 
-        # Presenterm rejects fenced code blocks nested inside list structures.
-        # Normalize by dedenting the whole fenced block to column 0.
+        # Normalize indented code fences
         fence_match = re.match(r'^([ \t]+)(```+.*)$', line)
         if not in_code_block and fence_match:
             dedent_prefix = fence_match.group(1)
@@ -79,14 +337,14 @@ def add_slide_delimiters(input_path, output_path, level=1):
         elif in_code_block and dedent_code_block and dedent_prefix and line.startswith(dedent_prefix):
             line = line[len(dedent_prefix):]
 
-        if not in_code_block and i + 1 < len(lines):
-            next_line = lines[i + 1]
+        if not in_code_block and i + 1 < len(body_lines):
+            next_line = body_lines[i + 1]
             if '|' in line and table_separator_pattern.match(next_line):
-                result.append('<!-- alignment: center -->\n')
-                while i < len(lines) and '|' in lines[i] and lines[i].strip():
-                    result.append(lines[i])
+                processed.append('<!-- alignment: center -->\n')
+                while i < len(body_lines) and '|' in body_lines[i] and body_lines[i].strip():
+                    processed.append(body_lines[i])
                     i += 1
-                result.append('<!-- alignment: left -->\n')
+                processed.append('<!-- alignment: left -->\n')
                 continue
 
         heading_match = any_heading_pattern.match(line)
@@ -95,19 +353,27 @@ def add_slide_delimiters(input_path, output_path, level=1):
 
             if slide_heading_pattern.match(line):
                 if in_slide and first_slide_heading_seen:
-                    result.append('<!-- end_slide -->\n')
+                    processed.append('<!-- end_slide -->\n')
                 first_slide_heading_seen = True
+
+            # Inject font_size before headings (h1, h2)
             if heading_level == 1:
-                result.append(f'<!-- font_size: {HEADING_FONT_SIZE} -->\n')
+                processed.append(f'<!-- font_size: {heading_mult} -->\n')
             elif heading_level == 2:
-                result.append(f'<!-- font_size: {HEADING_FONT_SIZE} -->\n')
-            result.append(line)
+                processed.append(f'<!-- font_size: {heading_mult} -->\n')
+
+            processed.append(line)
+
+            # Restore body font size after headings and add spacing
             if heading_level in (1, 2):
-                result.append(f'<!-- font_size: {DEFAULT_BODY_FONT_SIZE} -->\n')
+                processed.append(f'<!-- font_size: {body_mult} -->\n')
+                processed.append('<!-- new_line -->\n')
+
             if slide_heading_pattern.match(line):
                 in_slide = True
         else:
-            result.append(line)
+            processed.append(line)
+
         if code_fence_pattern.match(line):
             in_code_block = not in_code_block
             if not in_code_block:
@@ -115,10 +381,78 @@ def add_slide_delimiters(input_path, output_path, level=1):
                 dedent_prefix = ""
         i += 1
 
+    # Prepend the rewritten frontmatter to the result
     with open(output_path, 'w', encoding='utf-8') as f:
-        f.writelines(result)
+        # Write the frontmatter we reconstructed
+        f.writelines(result[:len(result) - len(body_lines)])
+        # Write the processed body
+        f.writelines(processed)
 
-    print(f"Created {output_path} with automatic slide breaks")
+    print(f"Created {output_path} with automatic slide breaks (body_font={body_mult}, heading_font={heading_mult}, base={base})")
+    return base, body_mult, heading_mult
+
+def create_clean_config(config_path, scale_factor=1.0, padding_config=None):
+    """
+    Load config and create temp config with wrapper section removed.
+    Optionally scales image_scale and injects padding-derived settings.
+    Returns path to temp config (or None on error).
+    """
+    if not os.path.exists(config_path):
+        return None
+
+    try:
+        with open(config_path, 'r') as f:
+            lines = f.readlines()
+
+        # Remove wrapper section from raw lines (preserve YAML formatting)
+        in_wrapper = False
+        cleaned_lines = []
+        for line in lines:
+            # Check if this line starts the wrapper section
+            if line.strip().startswith('wrapper:'):
+                in_wrapper = True
+                continue
+            # Check if we're leaving the wrapper section (next top-level key)
+            if in_wrapper and line and not line[0].isspace() and line.strip():
+                in_wrapper = False
+            # Skip wrapper section lines
+            if in_wrapper:
+                continue
+            cleaned_lines.append(line)
+
+        # Parse cleaned config to inject defaults
+        cleaned_yaml = yaml.safe_load("".join(cleaned_lines)) or {}
+
+        # Inject padding-derived settings into defaults
+        if padding_config:
+            if "defaults" not in cleaned_yaml:
+                cleaned_yaml["defaults"] = {}
+            for key in ("max_columns", "max_columns_alignment", "max_rows", "max_rows_alignment"):
+                if key in padding_config:
+                    cleaned_yaml["defaults"][key] = padding_config[key]
+
+        # Rewrite the config from parsed YAML (clean and correct)
+        fd, temp_path = tempfile.mkstemp(suffix=".yaml", prefix="presenterm-run-")
+        with os.fdopen(fd, 'w') as f:
+            yaml.dump(cleaned_yaml, f, default_flow_style=False, sort_keys=False)
+
+        return temp_path
+    except Exception as e:
+        print(f"Warning: failed to create clean config: {e}", file=sys.stderr)
+        return None
+
+def merge_config_for_scaling(config_path, scale_factor):
+    """
+    Load original config and create a temp config with scaled image_scale.
+    Returns path to temp config (or None if scale_factor == 1.0).
+
+    DEPRECATED: Use create_clean_config instead.
+    """
+    if abs(scale_factor - 1.0) < 0.001:
+        # Still need to create clean config to remove wrapper section
+        return create_clean_config(config_path, 1.0)
+
+    return create_clean_config(config_path, scale_factor)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -151,7 +485,47 @@ if __name__ == "__main__":
             f".presenterm-preprocessed-{input_basename}",
         )
 
-    add_slide_delimiters(input_file, output_file, args.heading_level)
+    # Load wrapper config
+    wrapper_config = load_wrapper_config()
+
+    # Process slides (may extract font_size from frontmatter)
+    base, body_mult, heading_mult = add_slide_delimiters(
+        input_file,
+        output_file,
+        args.heading_level,
+        font_size=wrapper_config["font_size"],
+        heading_ratio=wrapper_config["heading_ratio"],
+        theme_override=wrapper_config.get("theme_override"),
+    )
+
+    # Compute scale factor for image scaling
+    scale_factor = wrapper_config["font_size"] / 27.0  # 27 is the reference
+
+    # Compute padding config from pixel values
+    padding_px = parse_padding(wrapper_config.get("padding"))
+    padding_config = padding_to_presenterm_config(padding_px, base)
+
+    # Find presenterm-config.yaml using same logic as load_wrapper_config
+    config_file = None
+    candidates = [
+        os.getenv("PRESENTERM_CONFIG"),
+        os.path.join(os.getcwd(), "presenterm-config.yaml"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "presenterm-config.yaml"),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            config_file = candidate
+            break
+
+    # Always create a clean config (removes wrapper section that presenterm doesn't understand)
+    temp_config_path = create_clean_config(config_file, scale_factor, padding_config) if config_file else None
+
+    # Build presenterm command
+    presenterm_cmd = ["presenterm"]
+    if temp_config_path:
+        presenterm_cmd.extend(["--config-file", temp_config_path])
+    presenterm_cmd.extend(presenterm_args)
+    presenterm_cmd.append(output_file)
 
     # Start presentation immediately (replace current process)
-    os.execvp("presenterm", ["presenterm", *presenterm_args, output_file])
+    os.execvp("presenterm", presenterm_cmd)

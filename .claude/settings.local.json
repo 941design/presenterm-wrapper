@@ -3,7 +3,10 @@
     "allow": [
       "WebSearch",
       "WebFetch(domain:mfontanini.github.io)",
-      "Bash(curl -s https://raw.githubusercontent.com/mfontanini/presenterm/master/Cargo.toml)"
+      "Bash(curl -s https://raw.githubusercontent.com/mfontanini/presenterm/master/Cargo.toml)",
+      "Bash(make build-presenterm-amd64:*)",
+      "Bash(make build:*)",
+      "Bash(make build-presenterm:*)"
     ]
   }
 }
