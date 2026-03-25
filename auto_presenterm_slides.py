@@ -9,53 +9,46 @@ import argparse
 import yaml
 import tempfile
 
+# Built-in defaults — no config file needed for standard presentations
+DEFAULTS = {
+    "font_size": 28,
+    "heading_ratio": 1.4,
+    "image_scale": 1.0,
+    "padding": [20, 80],
+    "footer_ratio": 1.0,    # footer size relative to body (1.0 = same as body)
+    "theme_override": None,
+}
+
 def load_wrapper_config(config_path=None):
-    """Load wrapper configuration from presenterm-config.yaml"""
+    """Load wrapper configuration.
+
+    Merges built-in defaults with optional presenterm-config.yaml from cwd.
+    A config file is never required — the built-in defaults are sufficient.
+    """
+    result = dict(DEFAULTS)
+
     if config_path is None:
-        # Try multiple locations in order:
-        # 1. Environment variable override
-        # 2. presenterm-config.yaml in current working directory (where markdown files are)
-        # 3. presenterm-config.yaml in script directory (if running outside container)
         candidates = [
             os.getenv("PRESENTERM_CONFIG"),
             os.path.join(os.getcwd(), "presenterm-config.yaml"),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "presenterm-config.yaml"),
         ]
-
         for candidate in candidates:
             if candidate and os.path.exists(candidate):
                 config_path = candidate
                 break
-        else:
-            # If none found, use default in current dir
-            config_path = os.path.join(os.getcwd(), "presenterm-config.yaml")
 
-    defaults = {
-        "font_size": 27,
-        "heading_ratio": 0.75,
-        "image_scale": 1.0,
-    }
+    if config_path and os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f) or {}
+            wrapper = config.get("wrapper", {})
+            for key in result:
+                if key in wrapper:
+                    result[key] = wrapper[key]
+        except Exception as e:
+            print(f"Warning: failed to load config from {config_path}: {e}", file=sys.stderr)
 
-    if not os.path.exists(config_path):
-        return defaults
-
-    try:
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f) or {}
-        wrapper = config.get("wrapper", {})
-        result = {
-            "font_size": wrapper.get("font_size", defaults["font_size"]),
-            "heading_ratio": wrapper.get("heading_ratio", defaults["heading_ratio"]),
-            "image_scale": wrapper.get("image_scale", defaults["image_scale"]),
-            "theme_override": wrapper.get("theme_override"),
-            "padding": wrapper.get("padding"),
-        }
-        return result
-    except Exception as e:
-        print(f"Warning: failed to load config from {config_path}: {e}", file=sys.stderr)
-        defaults["theme_override"] = None
-        defaults["padding"] = None
-        return defaults
+    return result
 
 def compute_font_sizes(target_pt, heading_ratio):
     """
@@ -199,21 +192,27 @@ def parse_frontmatter(lines):
     except yaml.YAMLError:
         metadata = {}
 
-    # Extract and remove wrapper keys from metadata
+    # Extract and remove all wrapper keys from metadata
     wrapper_config = {}
-    for key in ("font_size", "heading_ratio"):
+    wrapper_keys = {
+        "font_size": int,
+        "heading_ratio": float,
+        "footer_ratio": float,
+        "image_scale": float,
+        "padding": None,  # kept as-is (int or list)
+    }
+    for key, convert in wrapper_keys.items():
         if key in metadata:
             try:
-                if key == "font_size":
-                    wrapper_config["font_size"] = int(metadata.pop(key))
-                elif key == "heading_ratio":
-                    wrapper_config["heading_ratio"] = float(metadata.pop(key))
+                val = metadata.pop(key)
+                wrapper_config[key] = convert(val) if convert else val
             except (ValueError, TypeError):
                 metadata.pop(key, None)
 
     return metadata, end_idx, wrapper_config
 
-def write_frontmatter(lines, metadata, end_idx, theme_override=None, heading_mult=None, body_mult=None):
+def write_frontmatter(lines, metadata, end_idx, theme_override=None,
+                      heading_mult=None, body_mult=None, footer_mult=None):
     """Reconstruct frontmatter with given metadata, injecting theme override and font sizes."""
 
     def _ensure_theme_override(fm_dict):
@@ -225,32 +224,42 @@ def write_frontmatter(lines, metadata, end_idx, theme_override=None, heading_mul
         if "override" not in fm_dict["theme"]:
             fm_dict["theme"]["override"] = {}
 
-    def _inject_intro_slide_fonts(fm_dict, heading_mult, body_mult):
-        """Inject intro slide font sizes: title=heading, subtitle/date/author=body."""
+    def _inject_font_sizes(fm_dict, heading_mult, body_mult, footer_mult):
+        """Inject font sizes for intro slide and footer."""
         _ensure_theme_override(fm_dict)
         override = fm_dict["theme"]["override"]
+
+        # Intro slide: title=heading, subtitle/date/author=body
         if "intro_slide" not in override:
             override["intro_slide"] = {}
         intro = override["intro_slide"]
 
-        # Title uses heading size (h1)
         if "title" not in intro:
             intro["title"] = {}
         if "font_size" not in intro["title"]:
             intro["title"]["font_size"] = heading_mult
 
-        # Subtitle, event, location, date use body multiplier (h2-like)
         for key in ("subtitle", "event", "location", "date"):
             if key not in intro:
                 intro[key] = {}
             if "font_size" not in intro[key]:
                 intro[key]["font_size"] = body_mult
 
-        # Author also uses body multiplier
         if "author" not in intro:
             intro["author"] = {}
         if "font_size" not in intro["author"]:
             intro["author"]["font_size"] = body_mult
+
+        # Footer font size — ensure footer has style (required by presenterm)
+        if footer_mult and footer_mult > 0:
+            if "footer" not in override:
+                override["footer"] = {"style": "template"}
+            footer = override["footer"]
+            if isinstance(footer, dict):
+                if "style" not in footer:
+                    footer["style"] = "template"
+                if "font_size" not in footer:
+                    footer["font_size"] = footer_mult
 
     if end_idx < 0:
         if not theme_override and heading_mult is None:
@@ -270,9 +279,9 @@ def write_frontmatter(lines, metadata, end_idx, theme_override=None, heading_mul
             if k not in fm_dict["theme"]["override"]:
                 fm_dict["theme"]["override"][k] = v
 
-    # Inject intro slide font sizes
+    # Inject font sizes (intro slide + footer)
     if heading_mult is not None and body_mult is not None:
-        _inject_intro_slide_fonts(fm_dict, heading_mult, body_mult)
+        _inject_font_sizes(fm_dict, heading_mult, body_mult, footer_mult)
 
     fm_yaml = yaml.dump(fm_dict, default_flow_style=False, sort_keys=False)
     result = ["---\n", fm_yaml, "---\n"]
@@ -280,7 +289,8 @@ def write_frontmatter(lines, metadata, end_idx, theme_override=None, heading_mul
         return result + lines
     return result + lines[end_idx + 1:]
 
-def add_slide_delimiters(input_path, output_path, level=1, font_size=None, heading_ratio=None, theme_override=None):
+def add_slide_delimiters(input_path, output_path, level=1, font_size=None, heading_ratio=None,
+                         theme_override=None, footer_ratio=1.0):
     """Insert <!-- end_slide --> before each heading of given level or higher"""
     slide_heading_pattern = re.compile(r'^\s*(#{1,' + str(level) + r'})\s+.+')
     any_heading_pattern = re.compile(r'^\s*(#{1,6})\s+.+')
@@ -299,14 +309,18 @@ def add_slide_delimiters(input_path, output_path, level=1, font_size=None, headi
         font_size = wrapper_config["font_size"]
     if "heading_ratio" in wrapper_config:
         heading_ratio = wrapper_config["heading_ratio"]
+    if "footer_ratio" in wrapper_config:
+        footer_ratio = wrapper_config["footer_ratio"]
 
     # Compute font sizes
     base, body_mult, heading_mult = compute_font_sizes(font_size, heading_ratio)
+    footer_mult = max(1, min(7, round(body_mult * footer_ratio)))
 
     # Reconstruct frontmatter without wrapper keys, injecting theme override
     result = write_frontmatter(lines, metadata, frontmatter_end_idx,
                               theme_override=theme_override,
-                              heading_mult=heading_mult, body_mult=body_mult)
+                              heading_mult=heading_mult, body_mult=body_mult,
+                              footer_mult=footer_mult)
 
     # Process the body
     in_slide = False
@@ -391,68 +405,74 @@ def add_slide_delimiters(input_path, output_path, level=1, font_size=None, headi
     print(f"Created {output_path} with automatic slide breaks (body_font={body_mult}, heading_font={heading_mult}, base={base})")
     return base, body_mult, heading_mult
 
-def create_clean_config(config_path, scale_factor=1.0, padding_config=None):
-    """
-    Load config and create temp config with wrapper section removed.
-    Optionally scales image_scale and injects padding-derived settings.
-    Returns path to temp config (or None on error).
-    """
-    if not os.path.exists(config_path):
-        return None
+PRESENTERM_DEFAULTS = {
+    "defaults": {
+        "terminal_font_size": 1,
+    },
+    "options": {
+        "list_item_newlines": 1,
+        "implicit_slide_ends": False,
+        "incremental_lists": False,
+        "strict_front_matter_parsing": True,
+        "auto_render_languages": ["mermaid", "latex"],
+    },
+}
 
+def create_clean_config(config_path=None, padding_config=None):
+    """
+    Generate a presenterm config file.
+
+    If config_path is given, loads it and strips the wrapper section.
+    Otherwise uses built-in defaults. Injects padding-derived settings.
+    Returns path to temp config.
+    """
     try:
-        with open(config_path, 'r') as f:
-            lines = f.readlines()
+        config = {}
 
-        # Remove wrapper section from raw lines (preserve YAML formatting)
-        in_wrapper = False
-        cleaned_lines = []
-        for line in lines:
-            # Check if this line starts the wrapper section
-            if line.strip().startswith('wrapper:'):
-                in_wrapper = True
-                continue
-            # Check if we're leaving the wrapper section (next top-level key)
-            if in_wrapper and line and not line[0].isspace() and line.strip():
-                in_wrapper = False
-            # Skip wrapper section lines
-            if in_wrapper:
-                continue
-            cleaned_lines.append(line)
+        if config_path and os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                lines = f.readlines()
 
-        # Parse cleaned config to inject defaults
-        cleaned_yaml = yaml.safe_load("".join(cleaned_lines)) or {}
+            # Remove wrapper section
+            in_wrapper = False
+            cleaned_lines = []
+            for line in lines:
+                if line.strip().startswith('wrapper:'):
+                    in_wrapper = True
+                    continue
+                if in_wrapper and line and not line[0].isspace() and line.strip():
+                    in_wrapper = False
+                if in_wrapper:
+                    continue
+                cleaned_lines.append(line)
 
-        # Inject padding-derived settings into defaults
+            config = yaml.safe_load("".join(cleaned_lines)) or {}
+
+        # Merge built-in defaults for any missing keys
+        for key, value in PRESENTERM_DEFAULTS.items():
+            if key not in config:
+                config[key] = value
+            elif isinstance(value, dict):
+                for k, v in value.items():
+                    if k not in config[key]:
+                        config[key][k] = v
+
+        # Inject padding-derived settings
         if padding_config:
-            if "defaults" not in cleaned_yaml:
-                cleaned_yaml["defaults"] = {}
+            if "defaults" not in config:
+                config["defaults"] = {}
             for key in ("max_columns", "max_columns_alignment", "max_rows", "max_rows_alignment"):
                 if key in padding_config:
-                    cleaned_yaml["defaults"][key] = padding_config[key]
+                    config["defaults"][key] = padding_config[key]
 
-        # Rewrite the config from parsed YAML (clean and correct)
         fd, temp_path = tempfile.mkstemp(suffix=".yaml", prefix="presenterm-run-")
         with os.fdopen(fd, 'w') as f:
-            yaml.dump(cleaned_yaml, f, default_flow_style=False, sort_keys=False)
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
         return temp_path
     except Exception as e:
-        print(f"Warning: failed to create clean config: {e}", file=sys.stderr)
+        print(f"Warning: failed to create config: {e}", file=sys.stderr)
         return None
-
-def merge_config_for_scaling(config_path, scale_factor):
-    """
-    Load original config and create a temp config with scaled image_scale.
-    Returns path to temp config (or None if scale_factor == 1.0).
-
-    DEPRECATED: Use create_clean_config instead.
-    """
-    if abs(scale_factor - 1.0) < 0.001:
-        # Still need to create clean config to remove wrapper section
-        return create_clean_config(config_path, 1.0)
-
-    return create_clean_config(config_path, scale_factor)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -496,29 +516,20 @@ if __name__ == "__main__":
         font_size=wrapper_config["font_size"],
         heading_ratio=wrapper_config["heading_ratio"],
         theme_override=wrapper_config.get("theme_override"),
+        footer_ratio=wrapper_config.get("footer_ratio", 1.0),
     )
-
-    # Compute scale factor for image scaling
-    scale_factor = wrapper_config["font_size"] / 27.0  # 27 is the reference
 
     # Compute padding config from pixel values
     padding_px = parse_padding(wrapper_config.get("padding"))
     padding_config = padding_to_presenterm_config(padding_px, base)
 
-    # Find presenterm-config.yaml using same logic as load_wrapper_config
-    config_file = None
-    candidates = [
-        os.getenv("PRESENTERM_CONFIG"),
-        os.path.join(os.getcwd(), "presenterm-config.yaml"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "presenterm-config.yaml"),
-    ]
-    for candidate in candidates:
-        if candidate and os.path.exists(candidate):
-            config_file = candidate
-            break
+    # Find presenterm-config.yaml in cwd (optional)
+    config_file = os.path.join(os.getcwd(), "presenterm-config.yaml")
+    if not os.path.exists(config_file):
+        config_file = None
 
-    # Always create a clean config (removes wrapper section that presenterm doesn't understand)
-    temp_config_path = create_clean_config(config_file, scale_factor, padding_config) if config_file else None
+    # Generate clean presenterm config (wrapper section removed, padding injected)
+    temp_config_path = create_clean_config(config_file, padding_config)
 
     # Build presenterm command
     presenterm_cmd = ["presenterm"]

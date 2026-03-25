@@ -1,7 +1,7 @@
 # Wrapper configuration (read by Python script and shell script, not presenterm)
 wrapper:
   font_size: 27        # desired body text size in pt
-  heading_ratio: 0.75  # heading/body ratio (e.g. 0.75 → heading ≈ ¾ of body)
+  heading_ratio: 1.5  # heading/body ratio (e.g. 0.75 → heading ≈ ¾ of body)
   image_scale: 1.0     # image scale at reference font_size
   # Padding in pixels (CSS shorthand):
   #   padding: 50           → 50px all sides
@@ -9,11 +9,6 @@ wrapper:
   #   padding: [20, 80, 40, 80]  → top, right, bottom, left
   padding: [20, 80]
   # Theme overrides injected into frontmatter by the preprocessor
-  theme_override:
-    footer:
-      style: template
-      left:
-        image: mustwork-logo.png
 
 defaults:
   terminal_font_size: 1

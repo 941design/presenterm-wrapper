@@ -45,12 +45,12 @@ def compute_font_sizes(target_pt, heading_ratio):
 
     return best
 
-# Defaults
-font_size = 27
-heading_ratio = 0.75
+# Built-in defaults (must match DEFAULTS in auto_presenterm_slides.py)
+font_size = 28
+heading_ratio = 1.4
 
-# Load from config file
-if len(sys.argv) > 2:
+# Optionally load from config file if provided
+if len(sys.argv) > 2 and sys.argv[2]:
     config_path = sys.argv[2]
     if os.path.exists(config_path):
         try:
@@ -76,7 +76,7 @@ if len(sys.argv) > 1:
                     if ':' in lines[i]:
                         key, val = lines[i].split(':', 1)
                         key = key.strip().lower()
-                        val = val.strip().strip('"').strip("'")
+                        val = val.split('#')[0].strip().strip('"').strip("'")
                         if key == 'font_size':
                             try:
                                 font_size = int(val)
@@ -281,8 +281,11 @@ fi
 
 # Compute dynamic KITTY_FONT_SIZE from config and frontmatter
 if [[ -n "$INPUT_ARG" ]]; then
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  config_file="${script_dir}/presenterm-config.yaml"
+  # Config file is optional — check cwd only
+  config_file=""
+  if [[ -f "${CWD_DIR}/presenterm-config.yaml" ]]; then
+    config_file="${CWD_DIR}/presenterm-config.yaml"
+  fi
   KITTY_FONT_SIZE=$(compute_kitty_font_size "$INPUT_ARG" "$config_file")
 fi
 
@@ -299,6 +302,9 @@ docker_cmd=(
   --cidfile "/tmp/presenterm-cid.$$"
   -v "${CWD_DIR}:/data"
   -w "${CONTAINER_WORKDIR}"
+)
+
+docker_cmd+=(
   "${IMAGE_NAME}:${TAG}"
   "${REL_ARGS[@]}"
 )

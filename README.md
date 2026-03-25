@@ -1,13 +1,44 @@
 ---
 title: presenterm-wrapper
+sub_title: Config-driven slide decks with Kitty + Docker
 author: markus.rother@mustwork.de
-date: 2026-02-14
+# authors:                     # list, alternative to single author
+#   - Alice
+#   - Bob
+
+# font_size: 28                 # desired body text size in pt (default: 28)
+# heading_ratio: 1.4              # heading/body ratio (default: 1.4)
+# footer_ratio: 1.0             # footer/body ratio (default: 1.0, same as body)
+# padding: [20, 80]             # CSS-style px: N | [V,H] | [T,R,B,L] (default: [20,80])
+# image_scale: 1.0              # image scale factor (default: 1.0)
+
 theme:
+  # name: catppuccin-frappe     # base theme name
+  # path: ./my-theme.yaml       # or path to custom theme file
   override:
     footer:
-      style: template
+      style: template           # template | progress_bar | empty
       left:
         image: mustwork-logo.png
+      # center: "{current_slide} / {total_slides}"
+      # right: "{author}"
+      # height: 3               # footer area height in rows
+      # font_size: 5            # footer font size (1-7, injected by wrapper if style present)
+    # intro_slide:              # (auto-injected by wrapper)
+    #   title:
+    #     font_size: 7          # = heading_mult
+    #   subtitle:
+    #     font_size: 5          # = body_mult
+    #   date:
+    #     font_size: 5
+    #   author:
+    #     font_size: 5
+    #     positioning: below_title  # below_title | page_bottom
+
+# options:
+#   implicit_slide_ends: false
+#   incremental_lists: false
+#   strict_front_matter_parsing: true
 ---
 
 # presenterm-wrapper
