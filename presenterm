@@ -132,7 +132,7 @@ extract_title() {
   title="${title%\'}"
 
   if [[ -z "$title" ]]; then
-    title="$REL_INPUT_PATH"
+    title="$INPUT_REL_PATH"
   fi
   printf '%s\n' "$title"
 }
